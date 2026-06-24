@@ -1,0 +1,104 @@
+name: Oracle Cloud Repeater
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 * * * *'  # Run every hour
+
+jobs:
+  create-instance:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: Install OCI CLI
+        run: |
+          python -m pip install --upgrade oci-cli
+      
+      - name: Create OCI Config Directory
+        run: |
+          mkdir -p ~/.oci
+          chmod 700 ~/.oci
+      
+      - name: Decode and Create Private Key
+        run: |
+          echo "${{ secrets.OCI_PRIVATE_KEY_BASE64 }}" | base64 -d > ~/.oci/private_key.pem
+          chmod 600 ~/.oci/private_key.pem
+      
+      - name: Create OCI Config
+        run: |
+          cat > ~/.oci/config << EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=${{ secrets.OCI_FINGERPRINT }}
+          key_file=~/.oci/private_key.pem
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=us-chicago-1
+          EOF
+          chmod 600 ~/.oci/config
+      
+      - name: Fix OCI Permissions
+        run: |
+          export OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True
+      
+      - name: Test OCI CLI Connection
+        run: |
+          export OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True
+          oci iam user get --user-id ${{ secrets.OCI_USER_OCID }} || echo "Warning: Could not verify user"
+      
+      - name: Create Instance (Keep Retrying)
+        run: |
+          #!/bin/bash
+          export OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True
+          END=$((SECONDS + 14400))  # 4 hours
+          ATTEMPT=0
+          
+          while [ $SECONDS -lt $END ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "=========================================="
+            echo "Attempt $ATTEMPT - $(date)"
+            echo "=========================================="
+            
+            oci compute instance launch \
+              --availability-domain "CrbD:US-CHICAGO-1-AD-3" \
+              --compartment-id "ocid1.tenancy.oc1..aaaaaaaabolm5rkgqzc7ykgcz7ppb2gf22c57ue2xdkqk5sl5so6xlzxpr3q" \
+              --image-id "ocid1.image.oc1.us-chicago-1.aaaaaaaaremq2g7crdfi5dv44tadt75p7c4jop4kkhbdesybo25gjj6sd5nq" \
+              --shape "VM.Standard.A1.Flex" \
+              --subnet-id "ocid1.subnet.oc1.us-chicago-1.aaaaaaaar676hptnkckjslr3nbtzvmqbgtplha7pwuxilibprmltkrlthcmq" \
+              --display-name "casaos-tailscale" \
+              --shape-config '{"ocpus":4,"memoryInGbs":24}' \
+              --boot-volume-size-in-gbs 200 && \
+            {
+              echo ""
+              echo "=========================================="
+              echo "✅ SUCCESS! Instance created!"
+              echo "=========================================="
+              exit 0
+            }
+            
+            # Check if it's just "out of capacity" (keep trying) vs auth error (stop)
+            if grep -q "NotAuthenticated\|NotAuthorizedOrNotFound" <<< "$?"; then
+              echo "❌ Authentication or authorization error. Check your credentials."
+              exit 1
+            fi
+            
+            # If failed, wait 60 seconds and try again
+            REMAINING=$((END - SECONDS))
+            REMAINING_MINUTES=$((REMAINING / 60))
+            echo "⏳ Out of capacity. Retrying in 60 seconds... ($REMAINING_MINUTES minutes left)"
+            sleep 60
+          done
+          
+          echo ""
+          echo "=========================================="
+          echo "❌ Timeout reached (4 hours). Instance not created."
+          echo "Run workflow again to continue retrying."
+          echo "=========================================="
+          exit 1
