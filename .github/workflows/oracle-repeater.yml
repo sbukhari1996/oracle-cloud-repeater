@@ -73,7 +73,7 @@ jobs:
               --shape "VM.Standard.A1.Flex" \
               --subnet-id "ocid1.subnet.oc1.us-chicago-1.aaaaaaaar676hptnkckjslr3nbtzvmqbgtplha7pwuxilibprmltkrlthcmq" \
               --display-name "casaos-tailscale" \
-              --shape-config '{"ocpus":4,"memoryInGbs":24}' \
+              --shape-config '{"ocpus":2,"memoryInGbs":12}' \
               --boot-volume-size-in-gbs 200 && \
             {
               echo ""
